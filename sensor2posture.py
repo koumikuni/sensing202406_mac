@@ -1,5 +1,5 @@
 import numpy as np
-import imufusion
+import imufusion # 姿勢推定のライブラリです。便利〜。
 from pythonosc import dispatcher, osc_server, udp_client
 import threading
 import time
@@ -7,7 +7,7 @@ import sys
 
 # コマンドライン引数の確認
 if len(sys.argv) < 2:
-    print("Usage: python script.py [port]")
+    print("Usage: python script.py [port]") # コマンドラインに受け取る際のポート番号を指定してpythonを実行。Raspiの台数分Pythonを同時に走らせる。
     sys.exit(1)
 
 # グローバル変数の初期化
@@ -75,8 +75,8 @@ server_thread = threading.Thread(target=server.serve_forever)
 server_thread.start()
 
 # OSCクライアント（送信先）の初期化
-send_ip = "127.0.0.1"
-send_port = 8000
+send_ip = "127.0.0.1" # ローカルのTouchDesignerで後処理するので、ローカルのIPアドレス。
+send_port = 8000 # ローカルのTouchDesignerで開いておくポート番号。ここ確認！
 client = udp_client.SimpleUDPClient(send_ip, send_port)
 
 # 姿勢推定とデータ送信の実行
