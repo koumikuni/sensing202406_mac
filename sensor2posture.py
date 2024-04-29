@@ -57,17 +57,17 @@ ahrs_l.settings = ahrs_r.settings = imufusion.Settings(
 )
 
 # OSCサーバーのアドレスとポート
-ip = "192.168.10.110"
+ip = "192.168.10.112"
 port = int(sys.argv[1])  # コマンドラインから受け取ったポート番号
 
 # OSCサーバーの設定
 disp = dispatcher.Dispatcher()
-disp.map("/raspi/l/accel", handle_accel_l)
-disp.map("/raspi/l/gyro", handle_gyro_l)
-disp.map("/raspi/l/mag", handle_mag_l)
-disp.map("/raspi/r/accel", handle_accel_r)
-disp.map("/raspi/r/gyro", handle_gyro_r)
-disp.map("/raspi/r/mag", handle_mag_r)
+disp.map("/raspi/L/accel", handle_accel_l)
+disp.map("/raspi/L/gyro", handle_gyro_l)
+disp.map("/raspi/L/mag", handle_mag_l)
+disp.map("/raspi/R/accel", handle_accel_r)
+disp.map("/raspi/R/gyro", handle_gyro_r)
+disp.map("/raspi/R/mag", handle_mag_r)
 
 # OSCサーバーの開始
 server = osc_server.ThreadingOSCUDPServer((ip, port), disp)
