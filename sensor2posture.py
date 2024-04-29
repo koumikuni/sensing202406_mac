@@ -1,5 +1,5 @@
 import numpy as np
-import imufusion # 姿勢推定に使うライブラリ
+import imufusion
 from pythonosc import dispatcher, osc_server, udp_client
 import threading
 import time
@@ -11,27 +11,43 @@ if len(sys.argv) < 2:
     sys.exit(1)
 
 # グローバル変数の初期化
-gyro_data = np.zeros(3)
-accel_data = np.zeros(3)
-mag_data = np.zeros(3)
+gyro_data_l = np.zeros(3)
+accel_data_l = np.zeros(3)
+mag_data_l = np.zeros(3)
+gyro_data_r = np.zeros(3)
+accel_data_r = np.zeros(3)
+mag_data_r = np.zeros(3)
 sample_rate = 100  # 100 Hz
 
 # OSCメッセージハンドラの定義
-def handle_accel(unused_addr, x, y, z):
-    global accel_data
-    accel_data[:] = [x, y, z]
+def handle_accel_l(unused_addr, x, y, z):
+    global accel_data_l
+    accel_data_l[:] = [x, y, z]
 
-def handle_gyro(unused_addr, x, y, z):
-    global gyro_data
-    gyro_data[:] = [x, y, z]
+def handle_gyro_l(unused_addr, x, y, z):
+    global gyro_data_l
+    gyro_data_l[:] = [x, y, z]
 
-def handle_mag(unused_addr, x, y, z):
-    global mag_data
-    mag_data[:] = [x, y, z]
+def handle_mag_l(unused_addr, x, y, z):
+    global mag_data_l
+    mag_data_l[:] = [x, y, z]
+
+def handle_accel_r(unused_addr, x, y, z):
+    global accel_data_r
+    accel_data_r[:] = [x, y, z]
+
+def handle_gyro_r(unused_addr, x, y, z):
+    global gyro_data_r
+    gyro_data_r[:] = [x, y, z]
+
+def handle_mag_r(unused_addr, x, y, z):
+    global mag_data_r
+    mag_data_r[:] = [x, y, z]
 
 # AHRSアルゴリズムの初期化
-ahrs = imufusion.Ahrs()
-ahrs.settings = imufusion.Settings(
+ahrs_l = imufusion.Ahrs()
+ahrs_r = imufusion.Ahrs()
+ahrs_l.settings = ahrs_r.settings = imufusion.Settings(
     imufusion.CONVENTION_NWU,  # 地球軸の慣例 (NWU)
     60.0,  # ゲイン
     2000,  # ジャイロスコープの範囲 (deg/s)
@@ -46,9 +62,12 @@ port = int(sys.argv[1])  # コマンドラインから受け取ったポート�
 
 # OSCサーバーの設定
 disp = dispatcher.Dispatcher()
-disp.map("/raspi/l/accel", handle_accel)
-disp.map("/raspi/l/gyro", handle_gyro)
-disp.map("/raspi/l/mag", handle_mag)
+disp.map("/raspi/l/accel", handle_accel_l)
+disp.map("/raspi/l/gyro", handle_gyro_l)
+disp.map("/raspi/l/mag", handle_mag_l)
+disp.map("/raspi/r/accel", handle_accel_r)
+disp.map("/raspi/r/gyro", handle_gyro_r)
+disp.map("/raspi/r/mag", handle_mag_r)
 
 # OSCサーバーの開始
 server = osc_server.ThreadingOSCUDPServer((ip, port), disp)
@@ -56,7 +75,7 @@ server_thread = threading.Thread(target=server.serve_forever)
 server_thread.start()
 
 # OSCクライアント（送信先）の初期化
-send_ip = "127.0.0.1" # センサー情報にフィルタをかけるのはセンサー班のMac（同じPC内）のTouchDesignerでやる。
+send_ip = "127.0.0.1"
 send_port = 8000
 client = udp_client.SimpleUDPClient(send_ip, send_port)
 
@@ -64,21 +83,18 @@ client = udp_client.SimpleUDPClient(send_ip, send_port)
 try:
     while True:
         # センサーデータを更新
-        ahrs.update(gyro_data, accel_data, mag_data, 1.0 / sample_rate)
+        ahrs_l.update(gyro_data_l, accel_data_l, mag_data_l, 1.0 / sample_rate)
+        ahrs_r.update(gyro_data_r, accel_data_r, mag_data_r, 1.0 / sample_rate)
         
         # クォータニオンをオイラー角に変換
-        euler_angles = ahrs.quaternion.to_euler()
-
-        # クォータニオンのデータを配列に格納
-        quaternion_data = [ahrs.quaternion.w, ahrs.quaternion.x, ahrs.quaternion.y, ahrs.quaternion.z]
-
-        # 結果の出力
-        print("Euler Angles:", euler_angles)
-        print("Accel:", accel_data)
+        euler_angles_l = ahrs_l.quaternion.to_euler()
+        euler_angles_r = ahrs_r.quaternion.to_euler()
 
         # OSCメッセージでデータ送信
-        client.send_message(f"/port{port}/posture/l/accel", [float(x) for x in accel_data])
-        client.send_message(f"/port{port}/posture/l/angle", [float(x) for x in euler_angles])
+        client.send_message(f"/port{port}/posture/l/accel", [float(x) for x in accel_data_l])
+        client.send_message(f"/port{port}/posture/l/angle", [float(x) for x in euler_angles_l])
+        client.send_message(f"/port{port}/posture/r/accel", [float(x) for x in accel_data_r])
+        client.send_message(f"/port{port}/posture/r/angle", [float(x) for x in euler_angles_r])
 
         # サンプルレートに合わせた待機
         time.sleep(1.0 / sample_rate)
