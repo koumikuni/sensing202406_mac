@@ -1,5 +1,5 @@
 import numpy as np
-import imufusion # 姿勢推定のライブラリです。便利〜。
+from ahrs.filters import Madgwick
 from pythonosc import dispatcher, osc_server, udp_client
 import threading
 import time
@@ -7,98 +7,72 @@ import sys
 
 # コマンドライン引数の確認
 if len(sys.argv) < 2:
-    print("Usage: python script.py [port]") # コマンドラインに受け取る際のポート番号を指定してpythonを実行。Raspiの台数分Pythonを同時に走らせる。
+    print("Usage: python script.py [port]")
     sys.exit(1)
 
-# グローバル変数の初期化
-gyro_data_l = np.zeros(3)
-accel_data_l = np.zeros(3)
-mag_data_l = np.zeros(3)
-gyro_data_r = np.zeros(3)
-accel_data_r = np.zeros(3)
-mag_data_r = np.zeros(3)
-sample_rate = 100  # 100 Hz
+# サンプルレートとタイムステップを定義
+sample_rate = 100  # Hz
 
-# OSCメッセージハンドラの定義
-def handle_accel_l(unused_addr, x, y, z):
-    global accel_data_l
-    accel_data_l[:] = [x, y, z]
+# 初期センサーデータの設定
+initial_gyro = np.zeros(3)
+initial_accel = np.array([0, 0, 9.81])  # m/s^2
+initial_mag = np.array([0.5, 0, 0])  # 仮の地磁気の値
 
-def handle_gyro_l(unused_addr, x, y, z):
-    global gyro_data_l
-    gyro_data_l[:] = [x, y, z]
+# Madgwickフィルタのオブジェクトを初期化
+madgwick_l = Madgwick(acc=initial_accel, gyr=initial_gyro, mag=initial_mag, frequency=sample_rate, gain=0.1)
+madgwick_r = Madgwick(acc=initial_accel, gyr=initial_gyro, mag=initial_mag, frequency=sample_rate, gain=0.1)
 
-def handle_mag_l(unused_addr, x, y, z):
-    global mag_data_l
-    mag_data_l[:] = [x, y, z]
+# クォータニオンからオイラー角へ変換する関数
+def quaternion_to_euler(quat):
+    x, y, z, w = quat
+    t0 = +2.0 * (w * x + y * z)
+    t1 = +1.0 - 2.0 * (x * x + y * y)
+    roll_x = np.arctan2(t0, t1)
+    t2 = +2.0 * (w * y - z * x)
+    t2 = np.clip(t2, -1.0, 1.0)
+    pitch_y = np.arcsin(t2)
+    t3 = +2.0 * (w * z + x * y)
+    t4 = +1.0 - 2.0 * (y * y + z * z)
+    yaw_z = np.arctan2(t3, t4)
+    return np.array([roll_x, pitch_y, yaw_z])
 
-def handle_accel_r(unused_addr, x, y, z):
-    global accel_data_r
-    accel_data_r[:] = [x, y, z]
+# OSCメッセージハンドラ
+def handle_sensor_data(address, args, *sensor_data):
+    madgwick, data_type = args
+    if 'gyro' in address:
+        gyro_data = np.array(sensor_data)
+        madgwick.updateIMU(gyro=gyro_data)
+    elif 'accel' in address:
+        accel_data = np.array(sensor_data)
+        madgwick.updateIMU(acc=accel_data)
+    elif 'mag' in address:
+        mag_data = np.array(sensor_data)
+        madgwick.updateIMU(mag=mag_data)
 
-def handle_gyro_r(unused_addr, x, y, z):
-    global gyro_data_r
-    gyro_data_r[:] = [x, y, z]
+    # クォータニオンからオイラー角への変換と送信
+    euler_angles = quaternion_to_euler(madgwick.Q)
+    client.send_message(f"{address}/euler", euler_angles.tolist())
 
-def handle_mag_r(unused_addr, x, y, z):
-    global mag_data_r
-    mag_data_r[:] = [x, y, z]
-
-# AHRSアルゴリズムの初期化
-ahrs_l = imufusion.Ahrs()
-ahrs_r = imufusion.Ahrs()
-ahrs_l.settings = ahrs_r.settings = imufusion.Settings(
-    imufusion.CONVENTION_NWU,  # 地球軸の慣例 (NWU)
-    60.0,  # ゲイン
-    2000,  # ジャイロスコープの範囲 (deg/s)
-    10,  # 加速度の拒否のしきい値 (degrees)
-    10,  # 磁気の拒否のしきい値 (degrees)
-    int(0.05 * sample_rate)  # 復帰トリガー期間 = 5秒
-)
-
-# OSCサーバーのアドレスとポート
+# OSCサーバーとクライアントの設定
 ip = "192.168.10.112"
 port = int(sys.argv[1])  # コマンドラインから受け取ったポート番号
+client_ip = "127.0.0.1"  # 送信先IP
+client_port = 8000  # 送信先ポート
 
-# OSCサーバーの設定
 disp = dispatcher.Dispatcher()
-disp.map("/raspi/L/accel", handle_accel_l)
-disp.map("/raspi/L/gyro", handle_gyro_l)
-disp.map("/raspi/L/mag", handle_mag_l)
-disp.map("/raspi/R/accel", handle_accel_r)
-disp.map("/raspi/R/gyro", handle_gyro_r)
-disp.map("/raspi/R/mag", handle_mag_r)
-
-# OSCサーバーの開始
+disp.map("/raspi/L/*", handle_sensor_data, (madgwick_l, 'L'))
+disp.map("/raspi/R/*", handle_sensor_data, (madgwick_r, 'R'))
 server = osc_server.ThreadingOSCUDPServer((ip, port), disp)
+client = udp_client.SimpleUDPClient(client_ip, client_port)
+
+# サーバースレッドを開始
 server_thread = threading.Thread(target=server.serve_forever)
 server_thread.start()
 
-# OSCクライアント（送信先）の初期化
-send_ip = "127.0.0.1" # ローカルのTouchDesignerで後処理するので、ローカルのIPアドレス。
-send_port = 8000 # ローカルのTouchDesignerで開いておくポート番号。ここ確認！
-client = udp_client.SimpleUDPClient(send_ip, send_port)
-
-# 姿勢推定とデータ送信の実行
+# プログラムが終了するのを待機
 try:
     while True:
-        # センサーデータを更新
-        ahrs_l.update(gyro_data_l, accel_data_l, mag_data_l, 1.0 / sample_rate)
-        ahrs_r.update(gyro_data_r, accel_data_r, mag_data_r, 1.0 / sample_rate)
-        
-        # クォータニオンをオイラー角に変換
-        euler_angles_l = ahrs_l.quaternion.to_euler()
-        euler_angles_r = ahrs_r.quaternion.to_euler()
-
-        # OSCメッセージでデータ送信
-        client.send_message(f"/port{port}/posture/l/accel", [float(x) for x in accel_data_l])
-        client.send_message(f"/port{port}/posture/l/angle", [float(x) for x in euler_angles_l])
-        client.send_message(f"/port{port}/posture/r/accel", [float(x) for x in accel_data_r])
-        client.send_message(f"/port{port}/posture/r/angle", [float(x) for x in euler_angles_r])
-
-        # サンプルレートに合わせた待機
-        time.sleep(1.0 / sample_rate)
-
+        time.sleep(1)
 except KeyboardInterrupt:
     server.shutdown()
     print("OSC server shutdown.")
